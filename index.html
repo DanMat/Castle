@@ -1,25 +1,122 @@
-<!--Dragon Prince-->
-<html> 
-<head> 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+	<meta name="description" content="Castle — a top-down maze chase & rescue. Dodge the mummies, grab the key, rescue your friend and escort them to the exit before time runs out. 8 levels, torchlight fog, an online leaderboard, and no dependencies." />
+	<title>Castle — maze escape</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+	<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+	<div class="frame">
+		<div class="hud">
+			<div class="hud__cell"><span class="hud__label">Score</span><span id="hudScore">0</span></div>
+			<div class="hud__cell hud__mid">
+				<span class="hud__level" id="hudLevel">Lv 1</span>
+				<span class="hud__keys" id="hudKeys"></span>
+			</div>
+			<div class="hud__cell hud__right">
+				<span class="hud__time" id="hudTime">60s</span>
+				<span class="hud__lives" id="hudLives">♥♥♥</span>
+			</div>
+		</div>
 
-<!-- We include the framework files -->
-<script type="text/javascript" src="akihabara/gbox.js"></script> 
-<script type="text/javascript" src="akihabara/iphopad.js"></script> 
-<script type="text/javascript" src="akihabara/trigo.js"></script> 
-<script type="text/javascript" src="akihabara/toys.js"></script> 
-<script type="text/javascript" src="akihabara/help.js"></script> 
-<script type="text/javascript" src="akihabara/tool.js"></script> 
-<script type="text/javascript" src="akihabara/gamecycle.js"></script> 
+		<div class="playfield">
+			<canvas id="game" width="880" height="560"></canvas>
 
+			<!-- Title -->
+			<div class="screen screen--title" id="screenTitle">
+				<h1 class="logo">CASTLE</h1>
+				<p class="tagline">Rescue your friend. Escape the mummies.</p>
+				<p class="title-top" id="titleTop"></p>
+				<div class="btns">
+					<button class="btn btn--primary" id="btnPlay">Play</button>
+					<button class="btn" id="btnHow">How to play</button>
+					<button class="btn" id="btnTitleLb">High scores</button>
+				</div>
+			</div>
 
-<!-- We include the game code -->
-<script type="text/javascript" src="js/game.js"></script>
-  
-<!-- We create a style sheet -->
-<style>BODY { -webkit-user-select: none; margin: 0px }</style> 
-<meta name="viewport" content="width=device-width; initial-scale=1.0; maximum-scale=1.0; user-scalable=0;" /> 
-<link rel="shortcut icon" href="images/favicon.ico" >
+			<!-- How to play -->
+			<div class="screen" id="screenHowto" hidden>
+				<h2 class="screen-title">How to play</h2>
+				<ul class="howto">
+					<li><strong>Move</strong> with <strong>WASD / arrow keys</strong> (or drag on touch).</li>
+					<li>You're lost in a castle. <strong>Mummies, bats and guards</strong> chase you — one touch and you lose a life.</li>
+					<li>Grab the <strong>🗝 key</strong>, find and <strong>rescue your friend</strong>, then <strong>escort them to the glowing exit</strong> before the timer runs out.</li>
+					<li>Collect <strong>💎 gems</strong> for score (chain them for a combo), and <strong>⏳ hourglasses</strong> for more time.</li>
+					<li>Power-ups: <strong>Freeze</strong> stops the mummies, <strong>Sprint</strong> speeds you up, <strong>Torch</strong> widens your view.</li>
+					<li>Beware <strong>spike traps</strong>, and use the <strong>minimap</strong>. Press <strong>P</strong> to pause.</li>
+				</ul>
+				<button class="btn btn--primary" id="btnHowClose">Back</button>
+			</div>
 
-</head> 
-<body></body> 
-</html> 
+			<!-- Level intro -->
+			<div class="screen screen--intro" id="screenIntro" hidden>
+				<p class="intro-level" id="introLevel">Level 1</p>
+				<h2 class="intro-name" id="introName">The Gatehouse</h2>
+				<p class="intro-tag" id="introTag">Find your friend</p>
+				<p class="hint">Get ready…</p>
+			</div>
+
+			<!-- Pause -->
+			<div class="screen" id="screenPause" hidden>
+				<h2 class="screen-title">Paused</h2>
+				<div class="btns">
+					<button class="btn btn--primary" id="btnResume">Resume</button>
+					<button class="btn" id="btnPauseMenu">Main menu</button>
+				</div>
+			</div>
+
+			<!-- Game over -->
+			<div class="screen" id="screenGameover" hidden>
+				<h2 class="screen-title" id="goTitle">Game Over</h2>
+				<p class="big-score" id="goScore">0</p>
+				<p class="screen-sub" id="goSub"></p>
+				<div class="btns">
+					<button class="btn btn--primary" id="btnAgain">Play again</button>
+					<button class="btn" id="btnGoLb">High scores</button>
+					<button class="btn" id="btnMenu">Main menu</button>
+				</div>
+			</div>
+
+			<!-- Initials -->
+			<div class="screen" id="screenInitials" hidden>
+				<h2 class="screen-title">New High Score!</h2>
+				<p class="big-score" id="initScore">0</p>
+				<p class="screen-sub">Enter your initials</p>
+				<div class="slots">
+					<div class="slot slot--active"><button class="slot__up" aria-label="up">▲</button><span class="slot__ch">A</span><button class="slot__down" aria-label="down">▼</button></div>
+					<div class="slot"><button class="slot__up" aria-label="up">▲</button><span class="slot__ch">A</span><button class="slot__down" aria-label="down">▼</button></div>
+					<div class="slot"><button class="slot__up" aria-label="up">▲</button><span class="slot__ch">A</span><button class="slot__down" aria-label="down">▼</button></div>
+				</div>
+				<p class="hint">Type letters or use ▲▼ · Enter to submit</p>
+				<button class="btn btn--primary" id="btnInitEnter">Enter</button>
+			</div>
+
+			<!-- Leaderboard -->
+			<div class="screen" id="screenLeaderboard" hidden>
+				<h2 class="screen-title" id="lbTitle">High Scores</h2>
+				<p class="screen-sub">Top scores · <span id="lbMode">this device</span></p>
+				<div class="lb-scroll">
+					<table class="lb">
+						<thead><tr><th>#</th><th>Name</th><th>Score</th><th>Lvl</th></tr></thead>
+						<tbody id="lbBody"></tbody>
+					</table>
+				</div>
+				<div class="btns">
+					<button class="btn btn--primary" id="btnLbAgain">Play again</button>
+					<button class="btn" id="btnLbMenu">Main menu</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script src="js/config.js"></script>
+	<script src="js/leaderboard.js"></script>
+	<script src="js/levels.js"></script>
+	<script src="js/game.js"></script>
+</body>
+</html>
