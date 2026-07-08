@@ -52,33 +52,42 @@
 
 	/* --------------------------- maze generation -------------------------- */
 
+	// Recursive-backtracker maze with 2-tile-wide corridors and 2x2 rooms, so a
+	// one-hit-death chaser can never hard-block a 1-wide corridor — there's room
+	// to juke past. Each cell is a 2x2 floor block; cells are separated by a
+	// 1-tile wall that gets knocked out (2 tiles wide) when a passage is carved.
 	function generateMaze(cols, rows) {
-		gridW = cols * 2 + 1; gridH = rows * 2 + 1;
+		var P = 3; // pitch: 2 floor + 1 wall
+		gridW = cols * P + 1; gridH = rows * P + 1;
 		grid = [];
 		for (var y = 0; y < gridH; y++) { grid[y] = []; for (var x = 0; x < gridW; x++) { grid[y][x] = 1; } }
+		function carveCell(cx, cy) { for (var a = 1; a <= 2; a++) { for (var b = 1; b <= 2; b++) { grid[cy * P + a][cx * P + b] = 0; } } }
+		function carveWall(cx, cy, nx, ny) {
+			if (cx !== nx) { var wx = Math.min(cx, nx) * P + P; grid[cy * P + 1][wx] = 0; grid[cy * P + 2][wx] = 0; }
+			else { var wy = Math.min(cy, ny) * P + P; grid[wy][cx * P + 1] = 0; grid[wy][cx * P + 2] = 0; }
+		}
 		var visited = [];
 		for (y = 0; y < rows; y++) { visited[y] = []; for (x = 0; x < cols; x++) { visited[y][x] = false; } }
-		var stack = [[0, 0]]; visited[0][0] = true; grid[1][1] = 0;
+		var stack = [[0, 0]]; visited[0][0] = true; carveCell(0, 0);
 		while (stack.length) {
-			var c = stack[stack.length - 1], cx = c[0], cy = c[1];
-			var nb = [];
+			var c = stack[stack.length - 1], cx = c[0], cy = c[1], nb = [];
 			[[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) {
 				var nx = cx + d[0], ny = cy + d[1];
-				if (nx >= 0 && ny >= 0 && nx < cols && ny < rows && !visited[ny][nx]) { nb.push([nx, ny, d]); }
+				if (nx >= 0 && ny >= 0 && nx < cols && ny < rows && !visited[ny][nx]) { nb.push([nx, ny]); }
 			});
 			if (!nb.length) { stack.pop(); continue; }
 			var pick = nb[(Math.random() * nb.length) | 0];
 			visited[pick[1]][pick[0]] = true;
-			grid[cy * 2 + 1 + pick[2][1]][cx * 2 + 1 + pick[2][0]] = 0; // knock down the wall between
-			grid[pick[1] * 2 + 1][pick[0] * 2 + 1] = 0;
+			carveCell(pick[0], pick[1]); carveWall(cx, cy, pick[0], pick[1]);
 			stack.push([pick[0], pick[1]]);
 		}
-		// Braid a few dead-ends into loops so it's less linear.
-		for (var i = 0; i < cols * rows * 0.12; i++) {
-			var rx = 1 + 2 * ((Math.random() * cols) | 0), ry = 1 + 2 * ((Math.random() * rows) | 0);
+		// Braid: knock out extra cell walls so there are always loops / alternate
+		// routes to escape a chaser.
+		for (var i = 0; i < cols * rows * 0.35; i++) {
+			var rcx = (Math.random() * cols) | 0, rcy = (Math.random() * rows) | 0;
 			var dir = [[1, 0], [-1, 0], [0, 1], [0, -1]][(Math.random() * 4) | 0];
-			var wx = rx + dir[0], wy = ry + dir[1];
-			if (wx > 0 && wy > 0 && wx < gridW - 1 && wy < gridH - 1) { grid[wy][wx] = 0; }
+			var ncx = rcx + dir[0], ncy = rcy + dir[1];
+			if (ncx >= 0 && ncy >= 0 && ncx < cols && ncy < rows) { carveWall(rcx, rcy, ncx, ncy); }
 		}
 	}
 
@@ -135,7 +144,7 @@
 		var far = start, best = -1;
 		tiles.forEach(function (t) { if (dist[t.ty][t.tx] > best) { best = dist[t.ty][t.tx]; far = t; } });
 
-		player = { x: 0, y: 0, r: 13, speed: 3.4, facing: 'down', dead: false, anim: 0, sx: start.tx, sy: start.ty };
+		player = { x: 0, y: 0, r: 11, speed: 3.4, facing: 'down', dead: false, anim: 0, sx: start.tx, sy: start.ty };
 		var sc = centerOf(start.tx, start.ty); player.x = sc.x; player.y = sc.y;
 		friend = { x: sc.x, y: sc.y, r: 12, facing: 'down', anim: 0, tx: far.tx, ty: far.ty };
 		var fc = centerOf(far.tx, far.ty); friend.x = fc.x; friend.y = fc.y;
@@ -167,17 +176,19 @@
 		for (i = 0; i < lvl.spikes; i++) { var t = take(4); if (t) { spikes.push({ tx: t.tx, ty: t.ty, phase: rand(0, 2) }); } }
 
 		var espawns = [];
-		function spawn(type, speed, count) {
+		// Speeds are well under the player's 3.4 so chasers are outrunnable.
+		// `aggro` is the range (px) within which a chaser actively pathfinds to
+		// you; beyond it they wander, so they never all pincer you at once.
+		function spawn(type, speed, aggro, count) {
 			for (var n = 0; n < count; n++) {
 				var t = take(8); if (!t) { t = take(4); } if (!t) { continue; }
 				var cc = centerOf(t.tx, t.ty);
-				espawns.push({ x: cc.x, y: cc.y, r: 13, type: type, speed: speed, facing: 'down', path: [], repath: 0, anim: rand(0, 6.28), sx: t.tx, sy: t.ty });
+				espawns.push({ x: cc.x, y: cc.y, r: 11, type: type, speed: speed, aggro: aggro, facing: 'down', path: [], repath: 0, anim: rand(0, 6.28), sx: t.tx, sy: t.ty, dir: [[1, 0], [-1, 0], [0, 1], [0, -1]][(Math.random() * 4) | 0] });
 			}
 		}
-		spawn('mummy', 2.1, lvl.mummies);
-		spawn('bat', 3.2, lvl.bats);
-		spawn('guard', 2.4, lvl.guards);
-		espawns.forEach(function (e) { if (e.type === 'guard') { e.dir = [[1, 0], [-1, 0], [0, 1], [0, -1]][(Math.random() * 4) | 0]; } });
+		spawn('mummy', 1.6, 300, lvl.mummies);
+		spawn('bat', 2.5, 380, lvl.bats);
+		spawn('guard', 1.9, 0, lvl.guards);
 		enemies = espawns;
 
 		showIntro();
@@ -189,6 +200,9 @@
 		enemies.forEach(function (e) { var c = centerOf(e.sx, e.sy); e.x = c.x; e.y = c.y; e.path = []; });
 		if (rescued) { friend.x = sc.x; friend.y = sc.y; }
 		trail = []; freeze = 1.2; noHit = false;
+		// Refund time so a timeout death can't instantly cascade through every
+		// life, and give a fair second chance after any death.
+		timeLeft = Math.max(timeLeft, 30);
 	}
 
 	function startGame() { newGame(); }
@@ -274,10 +288,14 @@
 		var m = Math.hypot(mx, my);
 		if (m > 0) {
 			mx /= m; my /= m;
-			var nx = p.x + mx * sp * f;
-			if (!boxHitsWall(nx, p.y, p.r)) { p.x = nx; }
-			var ny = p.y + my * sp * f;
-			if (!boxHitsWall(p.x, ny, p.r)) { p.y = ny; }
+			var sf = sp * f, movedX = false, movedY = false;
+			if (mx !== 0 && !boxHitsWall(p.x + mx * sf, p.y, p.r)) { p.x += mx * sf; movedX = true; }
+			if (my !== 0 && !boxHitsWall(p.x, p.y + my * sf, p.r)) { p.y += my * sf; movedY = true; }
+			// Cornering assist: if a pressed direction is blocked, ease toward the
+			// corridor centre on the other axis so turns round smoothly (Pac-Man
+			// style) instead of jamming when you're not perfectly aligned.
+			if (mx !== 0 && !movedX) { var cy = (Math.floor(p.y / TILE) + 0.5) * TILE, dy = clamp(cy - p.y, -sf, sf); if (Math.abs(cy - p.y) > 1 && !boxHitsWall(p.x, p.y + dy, p.r)) { p.y += dy; } }
+			if (my !== 0 && !movedY) { var cx = (Math.floor(p.x / TILE) + 0.5) * TILE, dx = clamp(cx - p.x, -sf, sf); if (Math.abs(cx - p.x) > 1 && !boxHitsWall(p.x + dx, p.y, p.r)) { p.x += dx; } }
 			p.facing = Math.abs(mx) > Math.abs(my) ? (mx > 0 ? 'right' : 'left') : (my > 0 ? 'down' : 'up');
 			p.anim += dt * 10;
 		}
@@ -314,13 +332,16 @@
 		var f = dt * 60, pt = tileOf(player);
 		enemies.forEach(function (e) {
 			e.anim += dt * 6;
-			if (e.type === 'guard') { patrol(e, f); }
-			else {
+			var d = Math.hypot(e.x - player.x, e.y - player.y);
+			if (e.type === 'guard' || d > e.aggro) {
+				e.path.length = 0;
+				patrol(e, f * (e.type === 'guard' ? 1 : 0.7)); // wander until it notices you
+			} else {
 				e.repath -= dt;
-				if (e.repath <= 0 || !e.path.length) { e.path = bfsPath(tileOf(e), pt); e.repath = e.type === 'bat' ? 0.25 : 0.45; }
+				if (e.repath <= 0 || !e.path.length) { e.path = bfsPath(tileOf(e), pt); e.repath = e.type === 'bat' ? 0.3 : 0.5; }
 				followPath(e, f);
 			}
-			if (!player.dead && Math.hypot(e.x - player.x, e.y - player.y) < e.r + player.r - 6) { hit(); }
+			if (!player.dead && d < e.r + player.r - 10) { hit(); }
 		});
 	}
 
