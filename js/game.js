@@ -13,7 +13,8 @@
 
 	var TILE = 40, W = 880, H = 560;
 	var LEVELS = window.CASTLE_LEVELS;
-	var canvas, ctx, dpr = 1, raf, lastTime;
+	var view, canvas, ctx;
+	var board, screens, initEntry, fx, sfx;   // Retroix-provided
 	var el = {};
 
 	/* ------------------------------- state -------------------------------- */
@@ -25,9 +26,23 @@
 	var cam = { x: 0, y: 0 };
 	var levelIndex = 0, lvl = null;
 	var score = 0, lives = 3, combo = 1, comboTimer = 0, keysHave = 0, keysNeed = 0, rescued = false, noHit = true;
-	var timeLeft = 60, torchR = 999, torchBoost = 0, freeze = 0, sprint = 0, flash = 0, shake = 0;
+	var timeLeft = 60, torchR = 999, torchBoost = 0, freeze = 0, sprint = 0;
 	var msg = '', msgT = 0, introTimer = 0, elapsed = 0;
 	var input = { up: false, down: false, left: false, right: false, touch: null };
+
+	// Background chiptunes — one per level (cycling), plus a title loop. Castle is
+	// a tense chase, so these lean minor/eerie.
+	var LEVEL_TRACKS = [
+		{ tempo: 108, voices: [
+			{ wave: 'square', vol: 0.22, notes: 'A4 - C5 - E5 - C5 - D5 - F5 - E5 - - -' },
+			{ wave: 'triangle', vol: 0.5, notes: 'A2 . . . F2 . . . G2 . . . E2 . . .' } ] },
+		{ tempo: 120, voices: [
+			{ wave: 'square', vol: 0.22, notes: 'D5 - F5 - A5 - F5 - E5 - G5 - F5 - D5 -' },
+			{ wave: 'triangle', vol: 0.5, notes: 'D3 . . . A#2 . . . C3 . . . A2 . . .' } ] },
+		{ tempo: 132, voices: [
+			{ wave: 'square', vol: 0.22, notes: 'E5 - G5 - B5 - G5 - F5 - A5 - G5 - E5 -' },
+			{ wave: 'sawtooth', vol: 0.28, notes: 'E3 . E3 . C3 . . . D3 . . . B2 . . .' } ] }
+	];
 
 	var THEMES = {
 		stone:  { floor: '#2b2f3a', floor2: '#242833', wall: '#4a5266', wallTop: '#5b6580', accent: '#ffcf6b' },
@@ -191,6 +206,7 @@
 		spawn('guard', 1.9, 0, lvl.guards);
 		enemies = espawns;
 
+		sfx.music(LEVEL_TRACKS[idx % LEVEL_TRACKS.length], { fade: 0.6 });
 		showIntro();
 	}
 
@@ -215,10 +231,10 @@
 		el.introName.textContent = lvl.name; el.introTag.textContent = lvl.tag;
 		showScreen('screenIntro'); updateHud();
 	}
-	function beginPlay() { state = 'playing'; showScreen(null); lastTime = performance.now(); }
+	function beginPlay() { state = 'playing'; showScreen(null); }
 
 	function loseLife() {
-		lives--; flash = 1; shake = 14; updateHud();
+		lives--; fx.flash('#ff283c', 0.35); fx.shake(0.75); sfx.explosion(); updateHud();
 		if (lives <= 0) { return endGame(false); }
 		toast('Caught! ' + lives + ' lives left');
 		respawn();
@@ -227,14 +243,16 @@
 	function levelClear() {
 		var bonus = 500 + Math.ceil(timeLeft) * 20 + (noHit ? 1000 : 0);
 		score += bonus; toast('Escaped! +' + bonus);
+		sfx.jingle('levelup');
 		if (levelIndex >= LEVELS.length - 1) { return endGame(true); }
 		startLevel(levelIndex + 1);
 	}
 
 	function endGame(won) {
 		state = 'ending';
+		sfx.stopMusic(0.4); sfx.jingle(won ? 'win' : 'gameover');
 		if (won) { score += lives * 1000; }
-		Leaderboard.qualifies(score).then(function (ok) { ok ? showInitials() : showGameover(won); });
+		board.qualifies(score).then(function (ok) { ok ? showInitials() : showGameover(won); });
 	}
 	function showGameover(won) {
 		state = 'gameover';
@@ -246,13 +264,11 @@
 
 	/* -------------------------------- loop -------------------------------- */
 
-	function loop(now) {
-		var dt = Math.min((now - lastTime) / 1000, 0.05);
-		lastTime = now;
+	function step(dt) {
+		fx.update(dt);
 		if (state === 'playing') { update(dt); }
 		else if (state === 'intro') { introTimer -= dt; if (introTimer <= 0) { beginPlay(); } }
 		render();
-		raf = requestAnimationFrame(loop);
 	}
 
 	function update(dt) {
@@ -263,8 +279,6 @@
 		if (sprint > 0) { sprint -= dt; }
 		if (torchBoost > 0) { torchBoost -= dt; }
 		if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) { combo = 1; } }
-		if (flash > 0) { flash = Math.max(0, flash - dt * 2); }
-		if (shake > 0) { shake = Math.max(0, shake - dt * 60); }
 		if (msgT > 0) { msgT -= dt; }
 
 		updatePlayer(dt);
@@ -313,7 +327,7 @@
 	function updateFriend(dt) {
 		if (!rescued) {
 			if (Math.hypot(player.x - friend.x, player.y - friend.y) < player.r + friend.r + 2) {
-				rescued = true; toast('Friend rescued! Get to the exit');
+				rescued = true; toast('Friend rescued! Get to the exit'); sfx.powerup();
 			}
 			return;
 		}
@@ -375,12 +389,13 @@
 		items.forEach(function (it) {
 			if (it.taken || it.tx !== pt.tx || it.ty !== pt.ty) { return; }
 			it.taken = true;
-			if (it.type === 'gem') { combo = comboTimer > 0 ? Math.min(combo + 1, 9) : 2; comboTimer = 3; score += 100 * combo; toast(combo > 2 ? '+' + (100 * combo) + '  x' + combo : '+' + (100 * combo)); }
-			else if (it.type === 'key') { keysHave++; toast('Got the key!'); }
-			else if (it.type === 'time') { timeLeft += 15; toast('+15 seconds'); }
-			else if (it.type === 'freeze') { freeze = 5; toast('Freeze! Mummies stopped'); }
-			else if (it.type === 'sprint') { sprint = 6; toast('Sprint!'); }
-			else if (it.type === 'torch') { torchBoost = 8; toast('Torch!'); }
+			if (it.type === 'gem') { combo = comboTimer > 0 ? Math.min(combo + 1, 9) : 2; comboTimer = 3; score += 100 * combo; toast(combo > 2 ? '+' + (100 * combo) + '  x' + combo : '+' + (100 * combo)); sfx.coin(); }
+			else if (it.type === 'key') { keysHave++; toast('Got the key!'); sfx.jingle('levelup'); }
+			else if (it.type === 'time') { timeLeft += 15; toast('+15 seconds'); sfx.powerup(); }
+			else if (it.type === 'freeze') { freeze = 5; toast('Freeze! Mummies stopped'); sfx.powerup(); }
+			else if (it.type === 'sprint') { sprint = 6; toast('Sprint!'); sfx.powerup(); }
+			else if (it.type === 'torch') { torchBoost = 8; toast('Torch!'); sfx.powerup(); }
+			else { sfx.blip(); }
 			updateHud();
 		});
 	}
@@ -405,8 +420,7 @@
 		// Nothing to draw until a level is loaded (player exists) — the title and
 		// other menus are DOM overlays over the canvas background.
 		if (!lvl || !player) { ctx.clearRect(0, 0, W, H); return; }
-		ctx.save();
-		if (shake > 0) { ctx.translate(rand(-shake, shake) * 0.4, rand(-shake, shake) * 0.4); }
+		fx.preRender(ctx);
 		ctx.translate(-cam.x, -cam.y);
 		drawMaze();
 		drawItems();
@@ -415,9 +429,8 @@
 		if (friend) { drawFriend(); }
 		drawEnemies();
 		drawPlayer();
-		ctx.restore();
+		fx.postRender(ctx);
 		if (torchR < 999 || torchBoost > 0) { drawFog(); }
-		if (flash > 0) { ctx.fillStyle = 'rgba(255,40,60,' + (flash * 0.35) + ')'; ctx.fillRect(0, 0, W, H); }
 		drawMinimap();
 		if (msgT > 0 && state === 'playing') { drawMsg(); }
 	}
@@ -574,50 +587,51 @@
 
 	/* --------------------------- initials / lb ---------------------------- */
 
-	var initSlots = ['A', 'A', 'A'], initCursor = 0;
-	function showInitials() { state = 'initials'; initSlots = ['A', 'A', 'A']; initCursor = 0; el.initScore.textContent = score.toLocaleString(); renderInitials(); showScreen('screenInitials'); }
-	function renderInitials() { el.screenInitials.querySelectorAll('.slot').forEach(function (s, i) { s.querySelector('.slot__ch').textContent = initSlots[i]; s.classList.toggle('slot--active', i === initCursor); }); }
-	function cycleSlot(i, d) { var c = (initSlots[i].charCodeAt(0) - 65 + d + 26) % 26; initSlots[i] = String.fromCharCode(65 + c); initCursor = i; renderInitials(); }
-	function submitInitials() { Leaderboard.submit(initSlots.join(''), score, levelIndex + 1).then(function () { showLeaderboard(initSlots.join('')); }); }
+	function showInitials() { state = 'initials'; initEntry.reset(); initEntry.active = true; el.initScore.textContent = score.toLocaleString(); showScreen('screenInitials'); }
+	function submitInitials() {
+		if (state !== 'initials') { return; }
+		initEntry.active = false;
+		var initials = initEntry.value();
+		board.submit(initials, score, levelIndex + 1).then(function () { showLeaderboard(initials); });
+	}
 
 	function showLeaderboard(highlight) {
 		state = 'leaderboard';
-		el.lbTitle.textContent = 'High Scores'; el.lbMode.textContent = Leaderboard.mode === 'supabase' ? 'online' : 'this device';
-		el.lbBody.innerHTML = '<tr><td colspan="4" class="lb-loading">Loading…</td></tr>';
+		el.lbTitle.textContent = 'High Scores'; el.lbMode.textContent = board.mode === 'supabase' ? 'online' : 'this device';
+		Retroix.renderLeaderboard(el.lbBody, null, { loadingText: 'Loading…' });
 		showScreen('screenLeaderboard');
-		Leaderboard.top().then(function (rows) {
-			if (!rows.length) { el.lbBody.innerHTML = '<tr><td colspan="4" class="lb-loading">No scores yet — be the first!</td></tr>'; return; }
-			var used = false;
-			el.lbBody.innerHTML = rows.map(function (row, i) {
-				var me = !used && highlight && row.initials === highlight && row.score === score; if (me) { used = true; }
-				return '<tr' + (me ? ' class="lb-me"' : '') + '><td>' + (i + 1) + '</td><td class="lb-ini">' + esc(row.initials) + '</td><td class="lb-score">' + Number(row.score).toLocaleString() + '</td><td>' + (row.stage || '-') + '</td></tr>';
-			}).join('');
+		board.top().then(function (rows) {
+			Retroix.renderLeaderboard(el.lbBody, rows, {
+				columns: ['rank', 'initials', 'score', 'stage'],
+				highlightInitials: highlight, highlightScore: score,
+				emptyText: 'No scores yet — be the first!'
+			});
 		});
 	}
-	function refreshTitleTop() { Leaderboard.top(1).then(function (rows) { el.titleTop.textContent = rows.length ? 'Best: ' + Number(rows[0].score).toLocaleString() + ' — ' + rows[0].initials : ''; }); }
-	function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+	function refreshTitleTop() { board.top(1).then(function (rows) { el.titleTop.textContent = rows.length ? 'Best: ' + Number(rows[0].score).toLocaleString() + ' — ' + rows[0].initials : ''; }); }
 
 	/* ------------------------------ screens ------------------------------- */
 
-	function showScreen(id) {
-		['screenTitle', 'screenHowto', 'screenIntro', 'screenPause', 'screenGameover', 'screenInitials', 'screenLeaderboard']
-			.forEach(function (s) { el[s].hidden = (s !== id); });
-	}
-	function showTitle() { state = 'title'; showScreen('screenTitle'); refreshTitleTop(); }
-	function togglePause() { if (state === 'playing') { state = 'paused'; showScreen('screenPause'); } else if (state === 'paused') { showScreen(null); state = 'playing'; lastTime = performance.now(); } }
+	function showScreen(id) { if (id) { screens.show(id); } else { screens.hideAll(); } }
+	function showTitle() { state = 'title'; showScreen('screenTitle'); refreshTitleTop(); sfx.music('title'); }
+	function togglePause() { if (state === 'playing') { state = 'paused'; showScreen('screenPause'); sfx.pauseMusic(); } else if (state === 'paused') { showScreen(null); state = 'playing'; sfx.resumeMusic(); } }
 
 	/* ------------------------------- setup -------------------------------- */
 
 	function boot() {
-		canvas = document.getElementById('game'); ctx = canvas.getContext('2d');
-		['hudScore', 'hudLevel', 'hudTime', 'hudLives', 'hudKeys', 'screenTitle', 'screenHowto', 'screenIntro',
-		 'screenPause', 'screenGameover', 'screenInitials', 'screenLeaderboard', 'introLevel', 'introName', 'introTag',
-		 'goTitle', 'goScore', 'goSub', 'initScore', 'lbBody', 'lbMode', 'lbTitle', 'titleTop'].forEach(function (id) { el[id] = document.getElementById(id); });
-		resize(); window.addEventListener('resize', resize);
+		view = Retroix.canvas('#game', W, H);
+		canvas = view.canvas; ctx = view.ctx;
+		fx = Retroix.fx(view);
+		sfx = Retroix.audio();
+		board = Retroix.leaderboard(window.GAME_CONFIG);
+		screens = Retroix.screens(document);
+		['hudScore', 'hudLevel', 'hudTime', 'hudLives', 'hudKeys', 'introLevel', 'introName', 'introTag',
+		 'goTitle', 'goScore', 'goSub', 'initScore', 'initMount', 'lbBody', 'lbMode', 'lbTitle', 'titleTop'].forEach(function (id) { el[id] = document.getElementById(id); });
+		initEntry = Retroix.initials(el.initMount, { onEnter: submitInitials });
+		initEntry.bindKeys();
 		bindInput(); bindButtons(); showTitle();
-		lastTime = performance.now(); raf = requestAnimationFrame(loop);
+		Retroix.loop(step).start();
 	}
-	function resize() { dpr = Math.min(window.devicePixelRatio || 1, 2); canvas.width = W * dpr; canvas.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
 
 	function pt(cx, cy) { var r = canvas.getBoundingClientRect(); return { x: (cx - r.left) / r.width * W, y: (cy - r.top) / r.height * H }; }
 	function bindInput() {
@@ -628,12 +642,13 @@
 
 		document.addEventListener('keydown', function (e) {
 			var k = e.key.toLowerCase();
-			if (state === 'initials') { return initKey(e); }
+			if (state === 'initials') { return; }   // Retroix initials entry handles keys
 			if (k === 'arrowup' || k === 'w') { input.up = true; }
 			else if (k === 'arrowdown' || k === 's') { input.down = true; }
 			else if (k === 'arrowleft' || k === 'a') { input.left = true; }
 			else if (k === 'arrowright' || k === 'd') { input.right = true; }
 			else if (k === 'p' || k === 'escape') { togglePause(); }
+			else if (k === 'm') { sfx.toggle(); }
 			else if (k === ' ' || k === 'enter') { if (state === 'title') { startGame(); } else if (state === 'intro') { beginPlay(); } }
 			if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].indexOf(k) !== -1) { e.preventDefault(); }
 		});
@@ -645,28 +660,12 @@
 			else if (k === 'arrowright' || k === 'd') { input.right = false; }
 		});
 	}
-	function initKey(e) {
-		var k = e.key;
-		if (/^[a-zA-Z]$/.test(k)) { initSlots[initCursor] = k.toUpperCase(); if (initCursor < 2) { initCursor++; } renderInitials(); }
-		else if (k === 'ArrowUp') { cycleSlot(initCursor, 1); }
-		else if (k === 'ArrowDown') { cycleSlot(initCursor, -1); }
-		else if (k === 'ArrowLeft') { initCursor = Math.max(0, initCursor - 1); renderInitials(); }
-		else if (k === 'ArrowRight') { initCursor = Math.min(2, initCursor + 1); renderInitials(); }
-		else if (k === 'Backspace') { initCursor = Math.max(0, initCursor - 1); renderInitials(); }
-		else if (k === 'Enter') { submitInitials(); }
-		e.preventDefault();
-	}
 	function bindButtons() {
 		on('btnPlay', startGame); on('btnHow', function () { showScreen('screenHowto'); }); on('btnHowClose', showTitle);
 		on('btnTitleLb', function () { showLeaderboard(null); });
 		on('btnResume', togglePause); on('btnPauseMenu', showTitle);
 		on('btnAgain', startGame); on('btnGoLb', function () { showLeaderboard(null); }); on('btnMenu', showTitle);
 		on('btnInitEnter', submitInitials); on('btnLbAgain', startGame); on('btnLbMenu', showTitle);
-		el.screenInitials.querySelectorAll('.slot').forEach(function (slot, i) {
-			slot.querySelector('.slot__up').addEventListener('click', function () { cycleSlot(i, 1); });
-			slot.querySelector('.slot__down').addEventListener('click', function () { cycleSlot(i, -1); });
-			slot.addEventListener('click', function (e) { if (!e.target.closest('button')) { initCursor = i; renderInitials(); } });
-		});
 	}
 	function on(id, fn) { var n = document.getElementById(id); if (n) { n.addEventListener('click', fn); } }
 
