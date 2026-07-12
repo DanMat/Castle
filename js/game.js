@@ -27,6 +27,7 @@
 	var levelIndex = 0, lvl = null;
 	var score = 0, lives = 3, combo = 1, comboTimer = 0, keysHave = 0, keysNeed = 0, rescued = false, noHit = true;
 	var timeLeft = 60, torchR = 999, torchBoost = 0, freeze = 0, sprint = 0;
+	var testMode = false, testDeaths = 0, wonFlag = false;   // autopilot: infinite lives + finish flag
 	var msg = '', msgT = 0, introTimer = 0, elapsed = 0;
 	var input = { up: false, down: false, left: false, right: false, touch: null };
 
@@ -235,6 +236,7 @@
 
 	function loseLife() {
 		lives--; fx.flash('#ff283c', 0.35); fx.shake(0.75); sfx.explosion(); updateHud();
+		if (testMode) { testDeaths++; lives = 3; respawn(); return; }   // infinite lives while testing
 		if (lives <= 0) { return endGame(false); }
 		toast('Caught! ' + lives + ' lives left');
 		respawn();
@@ -249,7 +251,7 @@
 	}
 
 	function endGame(won) {
-		state = 'ending';
+		state = 'ending'; wonFlag = won;
 		sfx.stopMusic(0.4); sfx.jingle(won ? 'win' : 'gameover');
 		if (won) { score += lives * 1000; }
 		board.qualifies(score).then(function (ok) { ok ? showInitials() : showGameover(won); });
@@ -631,6 +633,36 @@
 		initEntry.bindKeys();
 		bindInput(); bindButtons(); showTitle();
 		Retroix.loop(step).start();
+		setupAutopilot();
+	}
+
+	// Dev mode: Konami code -> a bot that pathfinds (reusing bfsPath) to the
+	// objective — key(s) -> friend -> exit — to check every maze is escapable.
+	// Infinite lives (chasers are deadly); deaths bucketed by level.
+	function setupAutopilot() {
+		Retroix.autopilot({
+			start: function () { testMode = true; testDeaths = 0; if (state === 'title') { startGame(); } },
+			stop: function () { testMode = false; },
+			bot: function () {
+				if (state !== 'playing' || !player) { return; }
+				var here = tileOf(player), goal = null;
+				if (keysHave < keysNeed) {
+					var best = null, bd = Infinity;
+					for (var i = 0; i < items.length; i++) { var it = items[i]; if (it.type !== 'key' || it.taken) { continue; } var d = Math.abs(it.tx - here.tx) + Math.abs(it.ty - here.ty); if (d < bd) { bd = d; best = it; } }
+					if (best) { goal = { tx: best.tx, ty: best.ty }; }
+				} else if (!rescued && friend) { goal = { tx: friend.tx, ty: friend.ty }; }
+				else { goal = { tx: player.sx, ty: player.sy }; }
+				if (!goal) { return; }
+				var path = bfsPath(here, goal), next = path.length ? path[0] : goal;
+				input.up = next.ty < here.ty; input.down = next.ty > here.ty;
+				input.left = next.tx < here.tx; input.right = next.tx > here.tx;
+			},
+			progress: function () { return levelIndex * 100000 + keysHave * 1000 + (rescued ? 3000 : 0) + score; },
+			location: function () { return levelIndex; },
+			deaths: function () { return testDeaths; },
+			isWin: function () { return !!wonFlag; },
+			deathsPerSpot: 12, stuck: 20, timeout: 220
+		});
 	}
 
 	function pt(cx, cy) { var r = canvas.getBoundingClientRect(); return { x: (cx - r.left) / r.width * W, y: (cy - r.top) / r.height * H }; }
